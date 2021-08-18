@@ -22,37 +22,37 @@ func TestUnmarshalFrame(t *testing.T) {
 	type args struct {
 		r io.Reader
 	}
-	f := Frame{
+	p := Packet{
 		ver:    1,
 		cmd:    0,
 		length: uint16(len(s)),
-		fid:    3,
+		pid:    3,
 		data:   s,
 	}
 
 	tests := []struct {
 		name    string
 		args    args
-		want    Frame
+		want    Packet
 		wantErr bool
 	}{
 		{
 			name:    "success",
 			args:    args{newBuffer},
-			want:    f,
+			want:    p,
 			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := UnmarshalFrame(tt.args.r)
+			got, err := UnmarshalPacket(tt.args.r)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("UnmarshalFrame() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("UnmarshalPacket() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("UnmarshalFrame() got = %v, want %v", got, tt.want)
+				t.Errorf("UnmarshalPacket() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -67,16 +67,16 @@ func TestMarshalFrame(t *testing.T) {
 	binary.BigEndian.PutUint32(data[4:8], 3)
 	copy(data[8:], s)
 
-	f := Frame{
+	f := Packet{
 		ver:    1,
 		cmd:    0,
 		length: uint16(len(s)),
-		fid:    3,
+		pid:    3,
 		data:   s,
 	}
 
 	type args struct {
-		f Frame
+		f Packet
 	}
 	tests := []struct {
 		name    string
@@ -94,13 +94,13 @@ func TestMarshalFrame(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := MarshalFrame(tt.arg.f)
+			got := MarshalPacket(tt.arg.f)
 			//if (err != nil) != tt.wantErr {
-			//	t.Errorf("MarshalFrame() error = %v, wantErr %v", err, tt.wantErr)
+			//	t.Errorf("MarshalPacket() error = %v, wantErr %v", err, tt.wantErr)
 			//	return
 			//}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("MarshalFrame() got = %v, want %v", got, tt.want)
+				t.Errorf("MarshalPacket() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
