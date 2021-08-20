@@ -24,8 +24,8 @@ type Packet struct {
 	data   []byte
 }
 
-func newPacket(version, cmd byte, pid uint32) Packet {
-	return Packet{ver: version, cmd: cmd, pid: pid}
+func newPacket(version, cmd byte, pid uint32) *Packet {
+	return &Packet{ver: version, cmd: cmd, pid: pid}
 }
 
 func UnmarshalPacket(r io.Reader) (*Packet, error) {
@@ -61,12 +61,12 @@ func UnmarshalPacket(r io.Reader) (*Packet, error) {
 	return p, nil
 }
 
-func MarshalPacket(p Packet) []byte {
+func MarshalPacket(p *Packet) []byte {
 	buf := make([]byte, 8+p.length)
 	buf[0] = p.ver
 	buf[1] = p.cmd
-	binary.BigEndian.PutUint16(buf[2:4], p.length)
-	binary.BigEndian.PutUint32(buf[4:8], p.pid)
+	binary.BigEndian.PutUint32(buf[2:6], p.pid)
+	binary.BigEndian.PutUint16(buf[6:8], p.length)
 	copy(buf[8:], p.data)
 	return buf
 }

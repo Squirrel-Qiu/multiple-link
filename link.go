@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"golang.org/x/xerrors"
 )
 
 type Link struct {
@@ -15,6 +18,9 @@ type Link struct {
 	bufLock         sync.Mutex
 
 	chReadEvent chan struct{}
+
+	readDeadline atomic.Value
+	writeDeadline atomic.Value
 }
 
 func newLink(id uint32, sess *Session) *Link {
@@ -30,6 +36,8 @@ func newLink(id uint32, sess *Session) *Link {
 
 func (l *Link) Read(b []byte) (n int, err error) {
 	// TODO set deadline
+	l.readDeadline.Load()
+
 	if len(b) == 0 {
 		return 0, nil
 	}
@@ -46,6 +54,7 @@ func (l *Link) Read(b []byte) (n int, err error) {
 
 		select {
 		case <-l.chReadEvent:
+		// readEvent from readLoop(peer)
 
 		case <-l.sess.chSocketReadError:
 			return 0, l.sess.socketReadError.Load().(error)
@@ -54,9 +63,42 @@ func (l *Link) Read(b []byte) (n int, err error) {
 	}
 }
 
+func (l *Link) Write(b []byte) (n int, err error) {
+	l.writeDeadline.Load()
+
+	if len(b) == 0 {
+		return 0, err
+	}
+
+	p := newPacket(byte(l.sess.config.Version), cmdPSH, l.ID)
+	p.data = b
+	p.pid = l.ID
+	n, err = l.sess.writePacket(p)
+	if err != nil {
+		return 0, xerrors.Errorf("link write failed: %w", err)
+	}
+	return len(b), nil
+}
+
 func (l *Link) notifyReadEvent() {
 	select {
 	case l.chReadEvent <- struct{}{}:
 	default:
 	}
+}
+
+func (l *Link) SetDeadline(t time.Time) error {
+	l.readDeadline.Store(t)
+	l.writeDeadline.Store(t)
+	return nil
+}
+
+func (l *Link) SetReadDeadline(t time.Time) error {
+	l.readDeadline.Store(t)
+	return nil
+}
+
+func (l *Link) SetWriteDeadline(t time.Time) error {
+	l.writeDeadline.Store(t)
+	return nil
 }

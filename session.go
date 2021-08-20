@@ -16,7 +16,7 @@ var (
 )
 
 type writeRequest struct {
-	packet Packet
+	packet *Packet
 	result chan writeResult
 }
 
@@ -86,8 +86,8 @@ func (s *Session) AcceptLink() (*Link, error) {
 func (s *Session) OpenLink() (*Link, error) {
 	link := newLink(atomic.AddUint32(&s.linkID, 1), s)
 
-	newF := newPacket(byte(s.config.Version), cmdSYN, link.ID)
-	if _, err := s.writePacket(newF); err != nil {
+	newP := newPacket(byte(s.config.Version), cmdSYN, link.ID)
+	if _, err := s.writePacket(newP); err != nil {
 		return nil, err
 	}
 	s.linkLock.Lock()
@@ -153,12 +153,10 @@ func (s *Session) readLoop() {
 					// TODO send close back
 				}
 				s.linkLock.Unlock()
-
-			default:
-				return
 			}
 		} else {
 			s.notifyReadError(err)
+			return
 		}
 
 	}
@@ -188,7 +186,7 @@ func (s *Session) writeLoop() {
 	}
 }
 
-func (s *Session) writePacket(p Packet) (int, error) {
+func (s *Session) writePacket(p *Packet) (int, error) {
 	req := writeRequest{
 		packet: p,
 		result: make(chan writeResult, 1),
@@ -198,6 +196,7 @@ func (s *Session) writePacket(p Packet) (int, error) {
 	case s.writes <- req:
 	case <-s.chSocketWriteError:
 		return 0, s.socketWriteError.Load().(error)
+	// TODO timeout
 	}
 
 	select {
@@ -205,6 +204,7 @@ func (s *Session) writePacket(p Packet) (int, error) {
 		return result.n, result.err
 	case <-s.chSocketWriteError:
 		return 0, s.socketWriteError.Load().(error)
+	// TODO timeout
 	}
 }
 
