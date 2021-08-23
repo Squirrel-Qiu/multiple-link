@@ -1,6 +1,7 @@
 package multiple_link
 
 import (
+	"encoding/binary"
 	"errors"
 	"net"
 	"sync"
@@ -16,13 +17,8 @@ var (
 )
 
 type writeRequest struct {
-	packet *Packet
-	result chan writeResult
-}
-
-type writeResult struct {
-	n   int
-	err error
+	packet  *Packet
+	written chan struct{}
 }
 
 type Session struct {
@@ -87,7 +83,7 @@ func (s *Session) OpenLink() (*Link, error) {
 	link := newLink(atomic.AddUint32(&s.linkID, 1), s)
 
 	newP := newPacket(byte(s.config.Version), cmdSYN, link.ID)
-	if _, err := s.writePacket(newP); err != nil {
+	if err := s.writePacket(newP); err != nil {
 		return nil, err
 	}
 	s.linkLock.Lock()
@@ -124,7 +120,16 @@ func (s *Session) readLoop() {
 					}
 				}
 				s.linkLock.Unlock()
+			case cmdACK:
+				s.linkLock.Lock()
+				if link, ok := s.links[pid]; ok {
+					atomic.StoreInt32(&link.writeableBufSize, int32(binary.BigEndian.Uint32(p.data)))
 
+					if atomic.LoadInt32(&link.writeableBufSize) > 0 {
+						link.notifyWriteEvent()
+					}
+				}
+				s.linkLock.Unlock()
 			case cmdPSH:
 				s.linkLock.Lock()
 				if link, ok := s.links[pid]; ok {
@@ -165,46 +170,40 @@ func (s *Session) readLoop() {
 func (s *Session) writeLoop() {
 	for {
 		select {
-		// TODO other
+		// TODO other case (die)
 		case req := <-s.writes:
 			b := MarshalPacket(req.packet)
-			n, err := s.conn.Write(b)
-
-			result := writeResult{
-				n:   n,
-				err: err,
-			}
-
-			req.result <- result
-			close(req.result)
-
-			if err != nil {
+			if _, err := s.conn.Write(b); err != nil {
 				s.notifyWriteError(err)
 				return
 			}
+
+			close(req.written)
 		}
 	}
 }
 
-func (s *Session) writePacket(p *Packet) (int, error) {
+func (s *Session) writePacket(p *Packet) error {
 	req := writeRequest{
-		packet: p,
-		result: make(chan writeResult, 1),
+		packet:  p,
+		written: make(chan struct{}),
 	}
 
 	select {
 	case s.writes <- req:
+
 	case <-s.chSocketWriteError:
-		return 0, s.socketWriteError.Load().(error)
-	// TODO timeout
+		return s.socketWriteError.Load().(error)
+		// TODO timeout
 	}
 
 	select {
-	case result := <-req.result:
-		return result.n, result.err
+	case <-req.written:
+		return nil
+
 	case <-s.chSocketWriteError:
-		return 0, s.socketWriteError.Load().(error)
-	// TODO timeout
+		return s.socketWriteError.Load().(error)
+		// TODO timeout
 	}
 }
 

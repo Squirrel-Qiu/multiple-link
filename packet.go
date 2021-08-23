@@ -11,6 +11,7 @@ const VERSION = 1
 
 const (
 	cmdSYN byte = iota
+	cmdACK
 	cmdPSH
 	cmdPing
 	cmdClose

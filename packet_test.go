@@ -67,7 +67,7 @@ func TestMarshalFrame(t *testing.T) {
 	binary.BigEndian.PutUint32(data[4:8], 3)
 	copy(data[8:], s)
 
-	f := Packet{
+	p := &Packet{
 		ver:    1,
 		cmd:    0,
 		length: uint16(len(s)),
@@ -76,17 +76,17 @@ func TestMarshalFrame(t *testing.T) {
 	}
 
 	type args struct {
-		f Packet
+		p *Packet
 	}
 	tests := []struct {
 		name    string
-		arg    args
-		want   []byte
+		arg     args
+		want    []byte
 		wantErr bool
 	}{
 		{
 			name:    "success2",
-			arg:    args{f},
+			arg:     args{p},
 			want:    data,
 			wantErr: false,
 		},
@@ -94,7 +94,7 @@ func TestMarshalFrame(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := MarshalPacket(tt.arg.f)
+			got := MarshalPacket(tt.arg.p)
 			//if (err != nil) != tt.wantErr {
 			//	t.Errorf("MarshalPacket() error = %v, wantErr %v", err, tt.wantErr)
 			//	return

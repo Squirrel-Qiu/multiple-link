@@ -2,6 +2,7 @@ package multiple_link
 
 import (
 	"bytes"
+	"encoding/binary"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -9,17 +10,23 @@ import (
 	"golang.org/x/xerrors"
 )
 
+const ACKPayloadLength = 4
+
 type Link struct {
 	ID   uint32
 	sess *Session
 
-	buf             *bytes.Buffer
-	readableBufSize int32  // the buffer can read
-	bufLock         sync.Mutex
+	buf     *bytes.Buffer
+	bufLock sync.Mutex
 
-	chReadEvent chan struct{}
+	// the buffer can read or write, control each other's read and write rate
+	readableBufSize  int32
+	writeableBufSize int32
 
-	readDeadline atomic.Value
+	chReadEvent  chan struct{}
+	chWriteEvent chan struct{}
+
+	readDeadline  atomic.Value
 	writeDeadline atomic.Value
 }
 
@@ -49,6 +56,13 @@ func (l *Link) Read(b []byte) (n int, err error) {
 
 		if n > 0 {
 			atomic.AddInt32(&l.readableBufSize, int32(n))
+
+			select {
+			// TODO when this link close
+			default:
+				go l.sendACK()
+			}
+
 			return
 		}
 
@@ -72,17 +86,47 @@ func (l *Link) Write(b []byte) (n int, err error) {
 
 	p := newPacket(byte(l.sess.config.Version), cmdPSH, l.ID)
 	p.data = b
-	p.pid = l.ID
-	n, err = l.sess.writePacket(p)
-	if err != nil {
-		return 0, xerrors.Errorf("link write failed: %w", err)
+
+	select {
+	// TODO other case (die)
+	// read ACK packet, update writeableBufSize and then notify
+	case <-l.chWriteEvent:
+		err = l.sess.writePacket(p)
+		if err != nil {
+			return 0, xerrors.Errorf("link write failed: %w", err)
+		}
+
+		if atomic.AddInt32(&l.writeableBufSize, int32(len(b))) > 0 {
+			l.notifyWriteEvent()
+		}
+
+		return len(b), nil
 	}
-	return len(b), nil
+}
+
+func (l *Link) sendACK() {
+	p := newPacket(byte(l.sess.config.Version), cmdACK, l.ID)
+
+	b := make([]byte, ACKPayloadLength)
+	size := atomic.LoadInt32(&l.readableBufSize)
+	if size < 0 {
+		size = 0
+	}
+	binary.BigEndian.PutUint32(b, uint32(size))
+	p.data = b
+	_ = l.sess.writePacket(p)
 }
 
 func (l *Link) notifyReadEvent() {
 	select {
 	case l.chReadEvent <- struct{}{}:
+	default:
+	}
+}
+
+func (l *Link) notifyWriteEvent() {
+	select {
+	case l.chWriteEvent <- struct{}{}:
 	default:
 	}
 }
