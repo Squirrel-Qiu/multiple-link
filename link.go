@@ -36,14 +36,19 @@ func newLink(id uint32, sess *Session) *Link {
 		sess:        sess,
 		buf:         bytes.NewBuffer(make([]byte, 0)),
 		chReadEvent: make(chan struct{}, 1),
+		chWriteEvent: make(chan struct{}, 1),
 	}
 
 	return link
 }
 
 func (l *Link) Read(b []byte) (n int, err error) {
-	// TODO set deadline
-	l.readDeadline.Load()
+	var deadline <-chan time.Time
+	if d, ok := l.readDeadline.Load().(time.Time); ok && !d.IsZero() {
+		timer := time.NewTimer(time.Until(d))
+		defer timer.Stop()
+		deadline = timer.C
+	}
 
 	if len(b) == 0 {
 		return 0, nil
@@ -72,13 +77,19 @@ func (l *Link) Read(b []byte) (n int, err error) {
 
 		case <-l.sess.chSocketReadError:
 			return 0, l.sess.socketReadError.Load().(error)
-			// TODO other case (timeout)
+		case <-deadline:
+			return 0, xerrors.Errorf("link read failed: %w", ErrTimeout)
 		}
 	}
 }
 
 func (l *Link) Write(b []byte) (n int, err error) {
-	l.writeDeadline.Load()
+	var deadline <-chan time.Time
+	if d, ok := l.writeDeadline.Load().(time.Time); ok && !d.IsZero() {
+		timer := time.NewTimer(time.Until(d))
+		defer timer.Stop()
+		deadline = timer.C
+	}
 
 	if len(b) == 0 {
 		return 0, err
@@ -88,6 +99,8 @@ func (l *Link) Write(b []byte) (n int, err error) {
 	p.data = b
 
 	select {
+	case <-deadline:
+		return 0, xerrors.Errorf("link write failed: %w", err)
 	// TODO other case (die)
 	// read ACK packet, update writeableBufSize and then notify
 	case <-l.chWriteEvent:
@@ -96,7 +109,7 @@ func (l *Link) Write(b []byte) (n int, err error) {
 			return 0, xerrors.Errorf("link write failed: %w", err)
 		}
 
-		if atomic.AddInt32(&l.writeableBufSize, int32(len(b))) > 0 {
+		if atomic.AddInt32(&l.writeableBufSize, -int32(len(b))) > 0 {
 			l.notifyWriteEvent()
 		}
 

@@ -59,13 +59,18 @@ func newSession(config *Config, conn net.Conn) *Session {
 	s.chSocketWriteError = make(chan struct{})
 
 	go s.readLoop()
+	go s.writeLoop()
 
 	return s
 }
 
 func (s *Session) AcceptLink() (*Link, error) {
-	var deadline chan time.Time
-	// TODO
+	var deadline <-chan time.Time
+	if d, ok := s.deadline.Load().(time.Time); ok && !d.IsZero() {
+		timer := time.NewTimer(time.Until(d))
+		defer timer.Stop()
+		deadline = timer.C
+	}
 
 	select {
 	case link := <-s.chAccepts:
@@ -92,7 +97,7 @@ func (s *Session) OpenLink() (*Link, error) {
 	select {
 	case <-s.chSocketWriteError:
 		return nil, s.socketWriteError.Load().(error)
-		// TODO other case
+		// TODO other case(die)
 	default:
 		s.links[link.ID] = link
 	}
@@ -102,7 +107,7 @@ func (s *Session) OpenLink() (*Link, error) {
 
 func (s *Session) readLoop() {
 	for {
-		// TODO
+		// TODO (die)
 
 		if p, err := UnmarshalPacket(s.conn); err == nil {
 			pid := p.pid
