@@ -28,6 +28,9 @@ type Link struct {
 
 	readDeadline  atomic.Value
 	writeDeadline atomic.Value
+
+	closeOnce sync.Once
+	die chan struct{}
 }
 
 func newLink(id uint32, sess *Session) *Link {
@@ -100,7 +103,7 @@ func (l *Link) Write(b []byte) (n int, err error) {
 
 	select {
 	case <-deadline:
-		return 0, xerrors.Errorf("link write failed: %w", err)
+		return 0, xerrors.Errorf("link write failed: %w", ErrTimeout)
 	// TODO other case (die)
 	// read ACK packet, update writeableBufSize and then notify
 	case <-l.chWriteEvent:
@@ -115,6 +118,25 @@ func (l *Link) Write(b []byte) (n int, err error) {
 
 		return len(b), nil
 	}
+}
+
+func (l *Link) Close() (err error) {
+	l.closeOnce.Do(func() {
+		close(l.die)
+
+		l.sess.removeLink(l.ID)
+
+		err = l.sess.writePacket(newPacket(byte(l.sess.config.Version), cmdClose, l.ID))
+	})
+
+	if err != nil {
+		return xerrors.Errorf("link close failed: %w", err)
+	}
+	return nil
+}
+
+func (l *Link) closeByPeer() {
+	l.sess.removeLink(l.ID)
 }
 
 func (l *Link) sendACK() {

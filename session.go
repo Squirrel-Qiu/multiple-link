@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/xerrors"
 )
 
 const defaultAcceptBacklog = 1024
@@ -46,6 +48,9 @@ type Session struct {
 	writes chan writeRequest
 
 	deadline atomic.Value
+
+	closeOnce sync.Once
+	die chan struct{}
 }
 
 func newSession(config *Config, conn net.Conn) *Session {
@@ -157,8 +162,7 @@ func (s *Session) readLoop() {
 				if link, ok := s.links[pid]; ok {
 					// TODO how read the remaining data of this link?
 					// TODO how peer delete too?
-					delete(s.links, pid)
-					link.closebypeer()
+					link.closeByPeer()
 				} else {
 					// TODO send close back
 				}
@@ -210,6 +214,32 @@ func (s *Session) writePacket(p *Packet) error {
 		return s.socketWriteError.Load().(error)
 		// TODO timeout
 	}
+}
+
+func (s *Session) removeLink(id uint32) {
+	delete(s.links, id)
+}
+
+func (s *Session) Close() (err error) {
+	s.closeOnce.Do(func() {
+		close(s.die)
+
+		s.linkLock.Lock()
+		for id := range s.links {
+			s.removeLink(id)
+
+			err = s.writePacket(newPacket(byte(s.config.Version), cmdClose, id))
+		}
+		s.linkLock.Unlock()
+
+		// TODO close peer session?
+	})
+
+	if err != nil {
+		return xerrors.Errorf("session close failed: %w", err)
+	}
+
+	return s.conn.Close()
 }
 
 //func (s *Session) notifyProtoErr() {
