@@ -2,12 +2,11 @@ package multiple_link
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 
 	"golang.org/x/xerrors"
 )
-
-const VERSION = 1
 
 const (
 	cmdSYN byte = iota
@@ -30,10 +29,12 @@ func newPacket(version, cmd byte, pid uint32) *Packet {
 }
 
 func UnmarshalPacket(r io.Reader) (*Packet, error) {
+	fmt.Println("start unmarshal packet")
 	b := make([]byte, 8)
 	if _, err := io.ReadFull(r, b); err != nil {
 		return nil, xerrors.Errorf("unmarshal packet from net.Conn failed: %w", err)
 	}
+	fmt.Println("read 8 bytes:", b)
 
 	p := new(Packet)
 

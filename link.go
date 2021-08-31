@@ -3,6 +3,7 @@ package multiple_link
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,10 +38,14 @@ func newLink(id uint32, sess *Session) *Link {
 	link := &Link{
 		ID:          id,
 		sess:        sess,
-		buf:         bytes.NewBuffer(make([]byte, 0)),
+		buf:         bytes.NewBuffer(make([]byte, 0, defaultBufSize)),
+		readableBufSize: sess.config.BufSize,
 		chReadEvent: make(chan struct{}, 1),
 		chWriteEvent: make(chan struct{}, 1),
+		die: make(chan struct{}),
 	}
+
+	link.notifyWriteEvent()
 
 	return link
 }
@@ -66,7 +71,8 @@ func (l *Link) Read(b []byte) (n int, err error) {
 			atomic.AddInt32(&l.readableBufSize, int32(n))
 
 			select {
-			// TODO when this link close
+			case <-l.die:
+				//return 0, xerrors.Errorf("link read failed: %w", io.ErrClosedPipe)
 			default:
 				go l.sendACK()
 			}
@@ -76,12 +82,14 @@ func (l *Link) Read(b []byte) (n int, err error) {
 
 		select {
 		case <-l.chReadEvent:
-		// readEvent from readLoop(peer)
+		// readEvent from readLoop(peer), continue read and return
 
 		case <-l.sess.chSocketReadError:
 			return 0, l.sess.socketReadError.Load().(error)
 		case <-deadline:
 			return 0, xerrors.Errorf("link read failed: %w", ErrTimeout)
+		case <-l.die:
+			return 0, xerrors.Errorf("link read failed: %w", io.ErrClosedPipe)
 		}
 	}
 }
@@ -99,13 +107,15 @@ func (l *Link) Write(b []byte) (n int, err error) {
 	}
 
 	p := newPacket(byte(l.sess.config.Version), cmdPSH, l.ID)
+	p.length = uint16(len(b))
 	p.data = b
 
 	select {
 	case <-deadline:
 		return 0, xerrors.Errorf("link write failed: %w", ErrTimeout)
-	// TODO other case (die)
-	// read ACK packet, update writeableBufSize and then notify
+	case <-l.die:
+		return 0, xerrors.Errorf("link write failed: %w", io.ErrClosedPipe)
+	// read ACK packet, update writeableBufSize, only if writeableBufSize > 0 notify
 	case <-l.chWriteEvent:
 		err = l.sess.writePacket(p)
 		if err != nil {
@@ -136,6 +146,7 @@ func (l *Link) Close() (err error) {
 }
 
 func (l *Link) closeByPeer() {
+	//close(l.die)
 	l.sess.removeLink(l.ID)
 }
 

@@ -1,58 +1,131 @@
 package multiple_link
 
 import (
+	"io/ioutil"
+	"net"
 	"sync"
-	"sync/atomic"
 	"testing"
+
+	"golang.org/x/xerrors"
 )
 
-func TestLink_Read(t *testing.T) {
-	type fields struct {
-		ID               uint32
-		sess             *Session
-		buf              *bytes.Buffer
-		bufLock          sync.Mutex
-		readableBufSize  int32
-		writeableBufSize int32
-		chReadEvent      chan struct{}
-		chWriteEvent     chan struct{}
-		readDeadline     atomic.Value
-		writeDeadline    atomic.Value
+func initTest(t *testing.T, addr string) (client net.Conn, server net.Conn) {
+	var err error
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+
+	go func() {
+		client, err = net.Dial("tcp", addr)
+		if err != nil {
+			t.Errorf("%+v", xerrors.Errorf("dial connection failed: %w", err))
+		}
+		wg.Done()
+	}()
+
+	go func() {
+		listener, _ := net.Listen("tcp", addr)
+		server, err = listener.Accept()
+		if err != nil {
+			t.Errorf("%+v", xerrors.Errorf("accept connection failed: %w", err))
+		}
+		wg.Done()
+	}()
+
+	wg.Wait()
+	
+	return client, server
+}
+
+func TestLinkClientToServer(t *testing.T) {
+	clientConn, serverConn := initTest(t, "127.0.0.1:6060")
+	defer func() {
+		clientConn.Close()
+		serverConn.Close()
+	}()
+
+	clientConf := DefaultConfig(ClientMode)
+	serverConf := DefaultConfig(ServerMode)
+
+	client := NewSession(clientConf,clientConn)
+	server := NewSession(serverConf, serverConn)
+
+	file, err := ioutil.ReadFile("testdata/more-than-254-less-than-65535")
+	if err != nil {
+		t.Fatalf("%+v", xerrors.Errorf("read file failed:", err))
 	}
-	type args struct {
-		b []byte
+
+	go func() {
+		link, err := client.OpenLink()
+		if err != nil {
+			t.Fatalf("%+v", xerrors.Errorf("client open link failed: %w", err))
+		}
+		defer link.Close()
+
+		if _, err := link.Write(file); err != nil {
+			t.Fatalf("%+v", xerrors.Errorf("client link write failed: %w", err))
+		}
+	}()
+
+	link, err := server.AcceptLink()
+	if err != nil {
+		t.Fatalf("%+v", xerrors.Errorf("server accept link failed: %w", err))
 	}
-	tests := []struct {
-		name    string
-		fields  fields
-		args    args
-		wantN   int
-		wantErr bool
-	}{
-		// TODO: Add test cases.
+	defer link.Close()
+
+	b := make([]byte, 17483)
+	_, err = link.Read(b)
+	if err != nil {
+		t.Fatalf("%+v", xerrors.Errorf("server link read failed: %w", err))
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			l := &Link{
-				ID:               tt.fields.ID,
-				sess:             tt.fields.sess,
-				buf:              tt.fields.buf,
-				bufLock:          tt.fields.bufLock,
-				readableBufSize:  tt.fields.readableBufSize,
-				writeableBufSize: tt.fields.writeableBufSize,
-				chReadEvent:      tt.fields.chReadEvent,
-				chWriteEvent:     tt.fields.chWriteEvent,
-				readDeadline:     tt.fields.readDeadline,
-				writeDeadline:    tt.fields.writeDeadline,
-			}
-			gotN, err := l.Read(tt.args.b)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Read() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if gotN != tt.wantN {
-				t.Errorf("Read() gotN = %v, want %v", gotN, tt.wantN)
-			}
-		})
+
+	if string(b) != string(file) {
+		t.Errorf("data verify failed, receive:\n%s\n\n\n\nwant:\n%s", string(b), string(file))
+	}
+}
+
+func TestLinkServerToClient(t *testing.T) {
+	clientConn, serverConn := initTest(t, "127.0.0.1:6060")
+	defer func() {
+		clientConn.Close()
+		serverConn.Close()
+	}()
+
+	clientConf := DefaultConfig(ClientMode)
+	serverConf := DefaultConfig(ServerMode)
+
+	client := NewSession(clientConf,clientConn)
+	server := NewSession(serverConf, serverConn)
+
+	file, err := ioutil.ReadFile("testdata/more-than-254-less-than-65535")
+	if err != nil {
+		t.Fatalf("%+v", xerrors.Errorf("read file failed:", err))
+	}
+
+	go func() {
+		link, err := server.OpenLink()
+		if err != nil {
+			t.Fatalf("%+v", xerrors.Errorf("client open link failed: %w", err))
+		}
+		defer link.Close()
+
+		if _, err := link.Write(file); err != nil {
+			t.Fatalf("%+v", xerrors.Errorf("client link write failed: %w", err))
+		}
+	}()
+
+	link, err := client.AcceptLink()
+	if err != nil {
+		t.Fatalf("%+v", xerrors.Errorf("server accept link failed: %w", err))
+	}
+	defer link.Close()
+
+	b := make([]byte, 17483)
+	_, err = link.Read(b)
+	if err != nil {
+		t.Fatalf("%+v", xerrors.Errorf("server link read failed: %w", err))
+	}
+
+	if string(b) != string(file) {
+		t.Errorf("data verify failed, receive:\n%s\n\n\n\nwant:\n%s", string(b), string(file))
 	}
 }
