@@ -72,8 +72,7 @@ func TestLinkClientToServer(t *testing.T) {
 	}
 	defer link.Close()
 
-	b := make([]byte, 17483)
-	_, err = link.Read(b)
+	b, err := ioutil.ReadAll(link)  // As of Go 1.16, this function simply calls io.ReadAll.
 	if err != nil {
 		t.Fatalf("%+v", xerrors.Errorf("server link read failed: %w", err))
 	}
@@ -119,8 +118,7 @@ func TestLinkServerToClient(t *testing.T) {
 	}
 	defer link.Close()
 
-	b := make([]byte, 17483)
-	_, err = link.Read(b)
+	b, err := ioutil.ReadAll(link)
 	if err != nil {
 		t.Fatalf("%+v", xerrors.Errorf("server link read failed: %w", err))
 	}

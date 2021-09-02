@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -90,6 +91,8 @@ func (s *Session) AcceptLink() (*Link, error) {
 		return nil, s.socketReadError.Load().(error)
 	case <-deadline:
 		return nil, ErrTimeout
+	case <-s.die:
+		return nil, io.ErrClosedPipe
 	}
 }
 
@@ -105,6 +108,8 @@ func (s *Session) OpenLink() (*Link, error) {
 	defer s.linkLock.Unlock()
 
 	select {
+	case <-s.die:
+		return nil, io.ErrClosedPipe
 	case <-s.chSocketWriteError:
 		return nil, s.socketWriteError.Load().(error)
 		// TODO other case(die)
@@ -196,7 +201,12 @@ func (s *Session) writeLoop() {
 		case req := <-s.writes:
 			fmt.Println(s.config.Mode, " accept s.writes:")
 			b := MarshalPacket(req.packet)
+
 			if _, err := s.conn.Write(b); err != nil {
+				s.closeOnce.Do(func() {
+					close(s.die)
+				})
+
 				s.notifyWriteError(err)
 				return
 			}
@@ -216,7 +226,7 @@ func (s *Session) writePacket(p *Packet) error {
 
 	select {
 	case s.writes <- req:
-		fmt.Println(s.config.Mode, " write packet to s.writes")
+		fmt.Println(s.config.Mode, " write packet to s.writes, cmd is", p.cmd)
 
 	case <-s.chSocketWriteError:
 		return s.socketWriteError.Load().(error)
@@ -236,6 +246,7 @@ func (s *Session) removeLink(id uint32) {
 }
 
 func (s *Session) Close() (err error) {
+	fmt.Println(s.config.Mode, " close===============")
 	s.closeOnce.Do(func() {
 		close(s.die)
 

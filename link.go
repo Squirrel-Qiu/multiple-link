@@ -3,6 +3,7 @@ package multiple_link
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,8 @@ type Link struct {
 
 	closeOnce sync.Once
 	die chan struct{}
+
+	eof sync.Once
 }
 
 func newLink(id uint32, sess *Session) *Link {
@@ -72,8 +75,9 @@ func (l *Link) Read(b []byte) (n int, err error) {
 
 			select {
 			case <-l.die:
-				//return 0, xerrors.Errorf("link read failed: %w", io.ErrClosedPipe)
+				// when the link is closed, peer doesn't care about the ack because it won't send any packets again
 			default:
+				fmt.Println("ack n:", n)
 				go l.sendACK()
 			}
 
@@ -89,7 +93,17 @@ func (l *Link) Read(b []byte) (n int, err error) {
 		case <-deadline:
 			return 0, xerrors.Errorf("link read failed: %w", ErrTimeout)
 		case <-l.die:
-			return 0, xerrors.Errorf("link read failed: %w", io.ErrClosedPipe)
+			err = xerrors.Errorf("link read failed: %w", io.ErrClosedPipe)
+
+			l.eof.Do(func() {
+				err = io.EOF
+			})
+
+			if err == io.EOF {
+				return
+			}
+
+			return
 		}
 	}
 }
@@ -146,7 +160,10 @@ func (l *Link) Close() (err error) {
 }
 
 func (l *Link) closeByPeer() {
-	//close(l.die)
+	l.closeOnce.Do(func() {
+		close(l.die)
+	})
+
 	l.sess.removeLink(l.ID)
 }
 
