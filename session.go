@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -52,7 +53,7 @@ type Session struct {
 	deadline atomic.Value
 
 	closeOnce sync.Once
-	die chan struct{}
+	die       chan struct{}
 }
 
 func NewSession(config *Config, conn net.Conn) *Session {
@@ -73,7 +74,6 @@ func NewSession(config *Config, conn net.Conn) *Session {
 }
 
 func (s *Session) AcceptLink() (*Link, error) {
-	fmt.Println(s.config.Mode, "start accept link")
 	var deadline <-chan time.Time
 	if d, ok := s.deadline.Load().(time.Time); ok && !d.IsZero() {
 		timer := time.NewTimer(time.Until(d))
@@ -83,7 +83,7 @@ func (s *Session) AcceptLink() (*Link, error) {
 
 	select {
 	case link := <-s.chAccepts:
-		fmt.Println(s.config.Mode, " accept link from chAccepts")
+		log.Println(s.config.Mode, " accept link from chAccepts, ID is ", link.ID)
 		return link, nil
 	//case <-s.chProtoErr:
 	//	return nil, ErrInvalidProtocol
@@ -98,7 +98,7 @@ func (s *Session) AcceptLink() (*Link, error) {
 
 func (s *Session) OpenLink() (*Link, error) {
 	link := newLink(atomic.AddUint32(&s.linkID, 1), s)
-	fmt.Println(s.config.Mode, " open link, link ID:", link.ID)
+	//log.Println(s.config.Mode, " open link, link ID:", link.ID)
 
 	newP := newPacket(byte(s.config.Version), cmdSYN, link.ID)
 	if err := s.writePacket(newP); err != nil {
@@ -112,10 +112,9 @@ func (s *Session) OpenLink() (*Link, error) {
 		return nil, io.ErrClosedPipe
 	case <-s.chSocketWriteError:
 		return nil, s.socketWriteError.Load().(error)
-		// TODO other case(die)
 	default:
 		s.links[link.ID] = link
-		fmt.Println(s.config.Mode, " map add link ok")
+		log.Println(s.config.Mode, " OpenLink map add link ok, ID is ", link.ID)
 	}
 
 	return link, nil
@@ -130,7 +129,7 @@ func (s *Session) readLoop() {
 		}
 
 		if p, err := UnmarshalPacket(s.conn); err == nil {
-			fmt.Println(s.config.Mode, " finish unmarshal packet")
+			log.Println(s.config.Mode, " readLoop finish unmarshal packet, cmd is ", p.cmd)
 			pid := p.pid
 
 			switch p.cmd {
@@ -142,7 +141,7 @@ func (s *Session) readLoop() {
 
 					select {
 					case s.chAccepts <- link:
-						fmt.Println(s.config.Mode, " chAccepts accept link")
+						log.Println(s.config.Mode, " chAccepts accept a link")
 						// TODO other case
 					}
 				}
@@ -150,7 +149,10 @@ func (s *Session) readLoop() {
 			case cmdACK:
 				s.linkLock.Lock()
 				if link, ok := s.links[pid]; ok {
-					atomic.StoreInt32(&link.writeableBufSize, int32(binary.BigEndian.Uint32(p.data)))
+					peerBufSize := binary.BigEndian.Uint32(p.data)
+					atomic.StoreInt32(&link.writeableBufSize, int32(peerBufSize))
+
+					log.Printf("readLoop receive ACK packet, writeableBufSize is %v ~~", atomic.LoadInt32(&link.writeableBufSize))
 
 					if atomic.LoadInt32(&link.writeableBufSize) > 0 {
 						link.notifyWriteEvent()
@@ -158,7 +160,7 @@ func (s *Session) readLoop() {
 				}
 				s.linkLock.Unlock()
 			case cmdPSH:
-				fmt.Println(s.config.Mode, " readLoop read PSH-packet: ", len(p.data))
+				log.Println(s.config.Mode, " readLoop read PSH-packet: ", len(p.data))
 				s.linkLock.Lock()
 				if link, ok := s.links[pid]; ok {
 					link.bufLock.Lock()
@@ -166,6 +168,7 @@ func (s *Session) readLoop() {
 					link.bufLock.Unlock()
 
 					atomic.AddInt32(&link.readableBufSize, -int32(len(p.data)))
+					log.Printf("read notify event, readableBufSize is %v ~~", atomic.LoadInt32(&link.readableBufSize))
 					link.notifyReadEvent()
 				} else {
 					// TODO send close back
@@ -176,6 +179,7 @@ func (s *Session) readLoop() {
 				// TODO keepalive
 
 			case cmdClose:
+				log.Println("readLoop cmd case close")
 				s.linkLock.Lock()
 				if link, ok := s.links[pid]; ok {
 					// TODO how read the remaining data of this link?
@@ -183,6 +187,7 @@ func (s *Session) readLoop() {
 					link.closeByPeer()
 				} else {
 					// TODO send close back
+					log.Printf("link ID %v isn't exist", pid)
 				}
 				s.linkLock.Unlock()
 			}
@@ -195,14 +200,14 @@ func (s *Session) readLoop() {
 }
 
 func (s *Session) writeLoop() {
-	fmt.Println(s.config.Mode, " writeLoop:")
 	for {
 		select {
 		case req := <-s.writes:
-			fmt.Println(s.config.Mode, " accept s.writes:")
+			log.Println(s.config.Mode, " accept s.writes")
 			b := MarshalPacket(req.packet)
 
 			if _, err := s.conn.Write(b); err != nil {
+				log.Println(s.config.Mode, "conn write failed")
 				s.closeOnce.Do(func() {
 					close(s.die)
 				})
@@ -210,6 +215,7 @@ func (s *Session) writeLoop() {
 				s.notifyWriteError(err)
 				return
 			}
+			//log.Println(s.config.Mode, "conn write ok")
 
 			close(req.written)
 		case <-s.die:
@@ -226,7 +232,7 @@ func (s *Session) writePacket(p *Packet) error {
 
 	select {
 	case s.writes <- req:
-		fmt.Println(s.config.Mode, " write packet to s.writes, cmd is", p.cmd)
+		log.Println(s.config.Mode, " write packet to s.writes, cmd is", p.cmd)
 
 	case <-s.chSocketWriteError:
 		return s.socketWriteError.Load().(error)

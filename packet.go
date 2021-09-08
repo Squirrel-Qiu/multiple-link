@@ -29,7 +29,6 @@ func newPacket(version, cmd byte, pid uint32) *Packet {
 }
 
 func UnmarshalPacket(r io.Reader) (*Packet, error) {
-	fmt.Println("start unmarshal packet")
 	b := make([]byte, 8)
 	if _, err := io.ReadFull(r, b); err != nil {
 		return nil, xerrors.Errorf("unmarshal packet from net.Conn failed: %w", err)
@@ -40,14 +39,14 @@ func UnmarshalPacket(r io.Reader) (*Packet, error) {
 
 	p.ver = b[0]
 	if p.ver != VERSION {
-		return nil, xerrors.Errorf("unmarshal packet's version from net.Conn isn't %w", p.ver)
+		return nil, xerrors.Errorf("unmarshal packet's version from net.Conn isn't %v", p.ver)
 	}
 
 	switch b[1] {
-	case cmdSYN, cmdPSH, cmdPing, cmdClose:
+	case cmdSYN, cmdACK, cmdPSH, cmdPing, cmdClose:
 		p.cmd = b[1]
 	default:
-		return nil, xerrors.Errorf("unmarshal packet's cmd from net.Conn isn't %w", b[1])
+		return nil, xerrors.Errorf("unmarshal packet's cmd from net.Conn isn't %v", b[1])
 	}
 
 	p.pid = binary.BigEndian.Uint32(b[2:6])

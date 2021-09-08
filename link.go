@@ -3,8 +3,8 @@ package multiple_link
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"io"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,6 +43,7 @@ func newLink(id uint32, sess *Session) *Link {
 		sess:        sess,
 		buf:         bytes.NewBuffer(make([]byte, 0, defaultBufSize)),
 		readableBufSize: sess.config.BufSize,
+		writeableBufSize: sess.config.BufSize,
 		chReadEvent: make(chan struct{}, 1),
 		chWriteEvent: make(chan struct{}, 1),
 		die: make(chan struct{}),
@@ -77,7 +78,6 @@ func (l *Link) Read(b []byte) (n int, err error) {
 			case <-l.die:
 				// when the link is closed, peer doesn't care about the ack because it won't send any packets again
 			default:
-				fmt.Println("ack n:", n)
 				go l.sendACK()
 			}
 
@@ -131,12 +131,14 @@ func (l *Link) Write(b []byte) (n int, err error) {
 		return 0, xerrors.Errorf("link write failed: %w", io.ErrClosedPipe)
 	// read ACK packet, update writeableBufSize, only if writeableBufSize > 0 notify
 	case <-l.chWriteEvent:
+		log.Println(l.sess.config.Mode, "start write packet")
 		err = l.sess.writePacket(p)
 		if err != nil {
 			return 0, xerrors.Errorf("link write failed: %w", err)
 		}
 
 		if atomic.AddInt32(&l.writeableBufSize, -int32(len(b))) > 0 {
+			log.Printf("write notify event, writeableBufSize is %v ~~", atomic.LoadInt32(&l.writeableBufSize))
 			l.notifyWriteEvent()
 		}
 
@@ -149,6 +151,7 @@ func (l *Link) Close() (err error) {
 		close(l.die)
 
 		l.sess.removeLink(l.ID)
+		log.Printf("close this link, ID is %v", l.ID)
 
 		err = l.sess.writePacket(newPacket(byte(l.sess.config.Version), cmdClose, l.ID))
 	})
@@ -160,6 +163,7 @@ func (l *Link) Close() (err error) {
 }
 
 func (l *Link) closeByPeer() {
+	log.Printf("close link by peer, ID is %v", l.ID)
 	l.closeOnce.Do(func() {
 		close(l.die)
 	})
@@ -175,7 +179,10 @@ func (l *Link) sendACK() {
 	if size < 0 {
 		size = 0
 	}
+	log.Println("sendACK the readableBufSize is ", size)
+
 	binary.BigEndian.PutUint32(b, uint32(size))
+	p.length = uint16(len(b))
 	p.data = b
 	_ = l.sess.writePacket(p)
 }
