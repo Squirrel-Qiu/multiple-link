@@ -3,7 +3,6 @@ package multiple_link
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -66,6 +65,7 @@ func NewSession(config *Config, conn net.Conn) *Session {
 	s.chSocketReadError = make(chan struct{})
 	s.chSocketWriteError = make(chan struct{})
 	s.writes = make(chan writeRequest)
+	s.die = make(chan struct{})
 
 	go s.readLoop()
 	go s.writeLoop()
@@ -83,7 +83,7 @@ func (s *Session) AcceptLink() (*Link, error) {
 
 	select {
 	case link := <-s.chAccepts:
-		log.Println(s.config.Mode, " accept link from chAccepts, ID is ", link.ID)
+		log.Println("accept link from chAccepts, ID is ", link.ID)
 		return link, nil
 	//case <-s.chProtoErr:
 	//	return nil, ErrInvalidProtocol
@@ -104,8 +104,6 @@ func (s *Session) OpenLink() (*Link, error) {
 	if err := s.writePacket(newP); err != nil {
 		return nil, err
 	}
-	s.linkLock.Lock()
-	defer s.linkLock.Unlock()
 
 	select {
 	case <-s.die:
@@ -113,8 +111,10 @@ func (s *Session) OpenLink() (*Link, error) {
 	case <-s.chSocketWriteError:
 		return nil, s.socketWriteError.Load().(error)
 	default:
+		s.linkLock.Lock()
 		s.links[link.ID] = link
-		log.Println(s.config.Mode, " OpenLink map add link ok, ID is ", link.ID)
+		s.linkLock.Unlock()
+		log.Println(" OpenLink map add link ok, ID is ", link.ID)
 	}
 
 	return link, nil
@@ -129,7 +129,7 @@ func (s *Session) readLoop() {
 		}
 
 		if p, err := UnmarshalPacket(s.conn); err == nil {
-			log.Println(s.config.Mode, " readLoop finish unmarshal packet, cmd is ", p.cmd)
+			log.Println("readLoop finish unmarshal packet, cmd is ", p.cmd)
 			pid := p.pid
 
 			switch p.cmd {
@@ -141,7 +141,7 @@ func (s *Session) readLoop() {
 
 					select {
 					case s.chAccepts <- link:
-						log.Println(s.config.Mode, " chAccepts accept a link")
+						log.Println("chAccepts accept a link")
 						// TODO other case
 					}
 				}
@@ -164,11 +164,11 @@ func (s *Session) readLoop() {
 				s.linkLock.Lock()
 				if link, ok := s.links[pid]; ok {
 					link.bufLock.Lock()
-					link.buf.Write(p.data) // write too large?
+					link.buf.Write(p.data)
 					link.bufLock.Unlock()
 
 					atomic.AddInt32(&link.readableBufSize, -int32(len(p.data)))
-					log.Printf("read notify event, readableBufSize is %v ~~", atomic.LoadInt32(&link.readableBufSize))
+					log.Printf("readLoop notify event, readableBufSize is %v ~~", atomic.LoadInt32(&link.readableBufSize))
 					link.notifyReadEvent()
 				} else {
 					// TODO send close back
@@ -183,7 +183,6 @@ func (s *Session) readLoop() {
 				s.linkLock.Lock()
 				if link, ok := s.links[pid]; ok {
 					// TODO how read the remaining data of this link?
-					// TODO how peer delete too?
 					link.closeByPeer()
 				} else {
 					// TODO send close back
@@ -215,7 +214,7 @@ func (s *Session) writeLoop() {
 				s.notifyWriteError(err)
 				return
 			}
-			//log.Println(s.config.Mode, "conn write ok")
+			log.Println(s.config.Mode, "conn write ok")
 
 			close(req.written)
 		case <-s.die:
@@ -232,7 +231,7 @@ func (s *Session) writePacket(p *Packet) error {
 
 	select {
 	case s.writes <- req:
-		log.Println(s.config.Mode, " write packet to s.writes, cmd is", p.cmd)
+		log.Printf("write packet to s.writes, cmd is %v, ID is %v", p.cmd, p.pid)
 
 	case <-s.chSocketWriteError:
 		return s.socketWriteError.Load().(error)
@@ -248,21 +247,27 @@ func (s *Session) writePacket(p *Packet) error {
 }
 
 func (s *Session) removeLink(id uint32) {
+	s.linkLock.Lock()
+	delete(s.links, id)
+	s.linkLock.Unlock()
+}
+
+func (s *Session) removeLinkWithoutLock(id uint32) {
 	delete(s.links, id)
 }
 
 func (s *Session) Close() (err error) {
-	fmt.Println(s.config.Mode, " close===============")
+	log.Println("close====================")
 	s.closeOnce.Do(func() {
 		close(s.die)
 
 		s.linkLock.Lock()
+		defer s.linkLock.Unlock()
 		for id := range s.links {
-			s.removeLink(id)
+			s.removeLinkWithoutLock(id)
 
 			err = s.writePacket(newPacket(byte(s.config.Version), cmdClose, id))
 		}
-		s.linkLock.Unlock()
 
 		// TODO close peer session?
 	})

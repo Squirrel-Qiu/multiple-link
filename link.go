@@ -32,21 +32,21 @@ type Link struct {
 	writeDeadline atomic.Value
 
 	closeOnce sync.Once
-	die chan struct{}
+	die       chan struct{}
 
 	eof sync.Once
 }
 
 func newLink(id uint32, sess *Session) *Link {
 	link := &Link{
-		ID:          id,
-		sess:        sess,
-		buf:         bytes.NewBuffer(make([]byte, 0, defaultBufSize)),
-		readableBufSize: sess.config.BufSize,
+		ID:               id,
+		sess:             sess,
+		buf:              bytes.NewBuffer(make([]byte, 0, defaultBufSize)),
+		readableBufSize:  sess.config.BufSize,
 		writeableBufSize: sess.config.BufSize,
-		chReadEvent: make(chan struct{}, 1),
-		chWriteEvent: make(chan struct{}, 1),
-		die: make(chan struct{}),
+		chReadEvent:      make(chan struct{}, 1),
+		chWriteEvent:     make(chan struct{}, 1),
+		die:              make(chan struct{}),
 	}
 
 	link.notifyWriteEvent()
@@ -131,7 +131,7 @@ func (l *Link) Write(b []byte) (n int, err error) {
 		return 0, xerrors.Errorf("link write failed: %w", io.ErrClosedPipe)
 	// read ACK packet, update writeableBufSize, only if writeableBufSize > 0 notify
 	case <-l.chWriteEvent:
-		log.Println(l.sess.config.Mode, "start write packet")
+		//log.Println(l.sess.config.Mode, "receive chWriteEvent start write")
 		err = l.sess.writePacket(p)
 		if err != nil {
 			return 0, xerrors.Errorf("link write failed: %w", err)
@@ -168,7 +168,7 @@ func (l *Link) closeByPeer() {
 		close(l.die)
 	})
 
-	l.sess.removeLink(l.ID)
+	l.sess.removeLinkWithoutLock(l.ID)
 }
 
 func (l *Link) sendACK() {

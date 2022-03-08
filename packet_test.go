@@ -13,8 +13,8 @@ func TestUnmarshalFrame(t *testing.T) {
 	data := make([]byte, 8+len(s))
 	data[0] = 1
 	data[1] = 0
-	binary.BigEndian.PutUint16(data[2:4], uint16(len(s)))
-	binary.BigEndian.PutUint32(data[4:8], 3)
+	binary.BigEndian.PutUint32(data[2:6], 3)
+	binary.BigEndian.PutUint16(data[6:8], uint16(len(s)))
 	copy(data[8:], s)
 
 	newBuffer := bytes.NewBuffer(data)
@@ -51,8 +51,8 @@ func TestUnmarshalFrame(t *testing.T) {
 				t.Errorf("UnmarshalPacket() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("UnmarshalPacket() got = %v, want %v", got, tt.want)
+			if !reflect.DeepEqual(*got, tt.want) {
+				t.Errorf("UnmarshalPacket() got = %v, want %v", *got, tt.want)
 			}
 		})
 	}
@@ -63,8 +63,8 @@ func TestMarshalFrame(t *testing.T) {
 	data := make([]byte, 8+len(s))
 	data[0] = 1
 	data[1] = 0
-	binary.BigEndian.PutUint16(data[2:4], uint16(len(s)))
-	binary.BigEndian.PutUint32(data[4:8], 3)
+	binary.BigEndian.PutUint32(data[2:6], 3)
+	binary.BigEndian.PutUint16(data[6:8], uint16(len(s)))
 	copy(data[8:], s)
 
 	p := &Packet{
